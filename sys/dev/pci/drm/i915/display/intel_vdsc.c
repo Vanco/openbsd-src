@@ -819,7 +819,16 @@ void intel_dsc_enable(const struct intel_crtc_state *crtc_state)
 	dss_ctl2_val |= VDSC0_ENABLE;
 	if (vdsc_instances_per_pipe > 1) {
 		dss_ctl2_val |= VDSC1_ENABLE;
-		dss_ctl1_val |= JOINER_ENABLE;
+    
+		/*
+		 * JOINER and SPLITTER are mutually exclusive. Dual link DSI
+		 * uses the splitter (one stream fanned out to two links),
+		 * which is not the same thing as the joiner (two pipes fed
+		 * into one stream), so two VDSC engines must not imply the
+		 * joiner here.
+		 */
+		if (!intel_crtc_has_type(crtc_state, INTEL_OUTPUT_DSI))
+		  dss_ctl1_val |= JOINER_ENABLE;
 	}
 
 	if (vdsc_instances_per_pipe > 2) {
@@ -839,8 +848,33 @@ void intel_dsc_enable(const struct intel_crtc_state *crtc_state)
 		if (intel_crtc_is_bigjoiner_primary(crtc_state))
 			dss_ctl1_val |= PRIMARY_BIG_JOINER_ENABLE;
 	}
-	intel_de_write(display, dss_ctl1_reg(crtc, crtc_state->cpu_transcoder), dss_ctl1_val);
-	intel_de_write(display, dss_ctl2_reg(crtc, crtc_state->cpu_transcoder), dss_ctl2_val);
+
+  	/*
+	 * The splitter is programmed before this function runs, by
+	 * configure_dual_link_mode() for dual link DSI and by
+	 * intel_ddi_mso_configure() for eDP MSO, both from the encoder
+	 * pre_enable hook. Writing the whole register here would wipe that
+	 * out, so preserve those bits for the outputs that own them, and
+	 * keep clearing them for everyone else.
+	 */
+	if (intel_crtc_has_type(crtc_state, INTEL_OUTPUT_DSI) ||
+	    crtc_state->splitter.enable) {
+		intel_de_rmw(display,
+			     dss_ctl1_reg(crtc, crtc_state->cpu_transcoder),
+			     ~(u32)SPLITTER_STATE, dss_ctl1_val);
+		intel_de_rmw(display,
+			     dss_ctl2_reg(crtc, crtc_state->cpu_transcoder),
+			     ~(u32)RIGHT_DL_BUF_TARGET_DEPTH_MASK,
+			     dss_ctl2_val);
+	} else {
+		intel_de_write(display,
+			       dss_ctl1_reg(crtc, crtc_state->cpu_transcoder),
+			       dss_ctl1_val);
+		intel_de_write(display,
+			       dss_ctl2_reg(crtc, crtc_state->cpu_transcoder),
+			       dss_ctl2_val);
+	}
+	
 }
 
 void intel_dsc_disable(const struct intel_crtc_state *old_crtc_state)

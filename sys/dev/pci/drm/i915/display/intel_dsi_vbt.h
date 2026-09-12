@@ -15,6 +15,8 @@ bool intel_dsi_vbt_init(struct intel_dsi *intel_dsi, u16 panel_id);
 void intel_dsi_vbt_gpio_init(struct intel_dsi *intel_dsi, bool panel_is_on);
 void intel_dsi_vbt_exec_sequence(struct intel_dsi *intel_dsi,
 				 enum mipi_seq seq_id);
+void intel_dsi_vbt_exec_reset_block(struct intel_dsi *intel_dsi);
+void intel_dsi_vbt_exec_init_otp(struct intel_dsi *intel_dsi);
 void intel_dsi_log_params(struct intel_dsi *intel_dsi);
 
 #endif /* __INTEL_DSI_VBT_H__ */

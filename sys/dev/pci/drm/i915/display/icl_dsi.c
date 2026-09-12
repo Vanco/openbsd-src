@@ -863,6 +863,28 @@ gen11_dsi_configure_transcoder(struct intel_encoder *encoder,
 		if (ret)
 			drm_err(display->drm, "DSI link not ready\n");
 	}
+
+  /*
+	 * Restore periodic frame update if the firmware was using it.
+	 *
+	 * gen11_dsi_deconfigure_trancoder() clears this bit on teardown but
+	 * nothing ever sets it, so once the driver has taken the transcoder
+	 * down the frames stop for good: icl_dsi_frame_update() only issues a
+	 * request at the end of a pipe update, and that pipe update waits for
+	 * a vblank which, in command mode, needs a frame to have been pushed.
+	 *
+	 * Keying this off what the firmware left behind leaves panels that
+	 * are driven from their own TE untouched.
+	 *
+	 * As the firmware does, enable it on DSI0 only, even for dual link.
+	 */
+	if (is_cmd_mode(intel_dsi) && intel_dsi->periodic_cmd_mode) {
+    	port = (intel_dsi->ports & BIT(PORT_A)) ? PORT_A : PORT_B;
+
+		intel_de_rmw(display, DSI_CMD_FRMCTL(port), 0,
+			     DSI_PERIODIC_FRAME_UPDATE_ENABLE);
+	}
+
 }
 
 static void
@@ -912,16 +934,28 @@ gen11_dsi_set_transcoder_timings(struct intel_encoder *encoder,
 	if (is_vid_mode(intel_dsi)) {
 		vtotal = adjusted_mode->crtc_vtotal;
 	} else {
-		int bpp, line_time_us, byte_clk_period_ns;
+   //int bpp, line_time_us, byte_clk_period_ns;
+    int bpp;
+    u64 line_time_ns;
+    u16 link_htotal = htotal;
+
+    if (intel_dsi->dual_link)
+      link_htotal /= 2;
 
 		if (crtc_state->dsc.compression_enable)
 			bpp = fxp_q4_to_int(crtc_state->dsc.compressed_bpp_x16);
 		else
 			bpp = mipi_dsi_pixel_format_to_bpp(intel_dsi->pixel_format);
 
-		byte_clk_period_ns = 1000000 / afe_clk(encoder, crtc_state);
-		line_time_us = (htotal * (bpp / 8) * byte_clk_period_ns) / (1000 * intel_dsi->lane_count);
-		vtotal = vactive + DIV_ROUND_UP(400, line_time_us);
+    line_time_ns =
+                DIV_ROUND_UP_ULL((u64)link_htotal * bpp * 1000000,
+                                afe_clk(encoder, crtc_state) *
+                                intel_dsi->lane_count);
+
+    //byte_clk_period_ns = 1000000 / afe_clk(encoder, crtc_state);
+		//line_time_us = (htotal * (bpp / 8) * byte_clk_period_ns) / (1000 * intel_dsi->lane_count);
+		//vtotal = vactive + DIV_ROUND_UP(400, line_time_us ? line_time_us : 1);
+    vtotal = vactive + DIV64_U64_ROUND_UP(400000ULL, line_time_ns);
 	}
 	vsync_start = adjusted_mode->crtc_vsync_start;
 	vsync_end = adjusted_mode->crtc_vsync_end;
@@ -973,11 +1007,43 @@ gen11_dsi_set_transcoder_timings(struct intel_encoder *encoder,
 				       TRANS_HSYNC(display, dsi_trans),
 				       HSYNC_START(hsync_start - 1) | HSYNC_END(hsync_end - 1));
 		}
+  } else if (intel_dsi->cmd_mode_timings.valid) {
+		/*
+		 * Not programmed at all in command mode, so after a
+		 * suspend/resume cycle these read back as zero.  Put the
+		 * firmware values back.
+		 */
+		for_each_dsi_port(port, intel_dsi->ports) {
+			dsi_trans = dsi_port_to_transcoder(port);
+			intel_de_write(display, TRANS_HSYNC(display, dsi_trans),
+				       intel_dsi->cmd_mode_timings.hsync);
+		}
 	}
 
 	/* program TRANS_VTOTAL register */
 	for_each_dsi_port(port, intel_dsi->ports) {
 		dsi_trans = dsi_port_to_transcoder(port);
+    /*
+		 * In command mode TRANS_VTOTAL is a DSI transfer parameter
+		 * rather than a video timing, and the computed value does
+		 * not match what this panel needs: the formula yields 2000
+		 * lines where the firmware programs 1666, and driving the
+		 * panel at the computed value tears the picture - a bar
+		 * sweeping up the screen at the beat frequency between the
+		 * two rates.
+		 *
+		 * There is no known derivation for the firmware's value, so
+		 * keep whatever it left in the register as long as it is
+		 * self-consistent, and only fall back to the computed value
+		 * when the register is cold.
+		 */
+		if (is_cmd_mode(intel_dsi) &&
+		    intel_dsi->cmd_mode_timings.valid) {
+			u32 fw = intel_dsi->cmd_mode_timings.vtotal;
+
+			vtotal = REG_FIELD_GET(VTOTAL_MASK, fw) + 1;
+		}
+
 		/*
 		 * FIXME: Programming this by assuming progressive mode, since
 		 * non-interlaced info from VBT is not saved inside
@@ -1001,6 +1067,12 @@ gen11_dsi_set_transcoder_timings(struct intel_encoder *encoder,
 			intel_de_write(display,
 				       TRANS_VSYNC(display, dsi_trans),
 				       VSYNC_START(vsync_start - 1) | VSYNC_END(vsync_end - 1));
+		}
+  } else if (intel_dsi->cmd_mode_timings.valid) {
+		for_each_dsi_port(port, intel_dsi->ports) {
+			dsi_trans = dsi_port_to_transcoder(port);
+			intel_de_write(display, TRANS_VSYNC(display, dsi_trans),
+				       intel_dsi->cmd_mode_timings.vsync);
 		}
 	}
 
@@ -1102,6 +1174,68 @@ static void gen11_dsi_setup_timeouts(struct intel_encoder *encoder,
 	}
 }
 
+/*
+ * Undocumented pin buffer control sitting between UTIL_PIN_CTL (0x48400) and
+ * AUD_PIN_BUF_CTL (0x48414); i915 has never known about it.
+ *
+ * util pin carries the TE of the master link, but on a dual link panel the TE
+ * that actually gates the transfer comes from the slave link over a separate
+ * GPIO, and this register enables that pin's buffer.  The firmware programs
+ * it, i915 never touches it, and it does not survive S3.  Once it reads zero
+ * the TE still pulses on the pin -- UTIL_PIN_CTL bit 16 keeps toggling at
+ * 59.7 Hz -- but it never reaches the DSI1_TE interrupt, so command mode
+ * never gets a vblank, every commit times out, and the picture is frozen with
+ * the panel happily self refreshing its last frame.
+ *
+ * Writing this one register by hand takes the panel from 0 to 59.7 frames per
+ * second with no modeset and without touching the panel at all, which is what
+ * pinned it down.
+ */
+#define DSI_PIN_BUF_CTL		_MMIO(0x48408)
+
+/*
+ * Remember whatever non-zero value is found here and put it back when it has
+ * been lost.  Sampling lazily rather than snapshotting at init avoids having
+ * to know when the register first becomes readable, and platforms where it
+ * always reads zero never get a write.
+ */
+static void gen11_dsi_restore_pin_buf_ctl(struct intel_encoder *encoder)
+{
+	struct intel_display *display = to_intel_display(encoder);
+	struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
+	u32 val;
+
+	/*
+	 * Only command mode is known to depend on this; a video mode panel
+	 * does not gate its transfer on TE at all, so leave it alone.
+	 */
+	if (!is_cmd_mode(intel_dsi))
+		return;
+
+	val = intel_de_read(display, DSI_PIN_BUF_CTL);
+
+	if (val) {
+		if (val != intel_dsi->pin_buf_ctl) {
+			drm_dbg_kms(display->drm,
+				    "[ENCODER:%d:%s] DSI_PIN_BUF_CTL is 0x%08x\n",
+				    encoder->base.base.id, encoder->base.name,
+				    val);
+			intel_dsi->pin_buf_ctl = val;
+		}
+		return;
+	}
+
+	if (!intel_dsi->pin_buf_ctl)
+		return;
+
+	drm_info(display->drm,
+		 "[ENCODER:%d:%s] restoring DSI_PIN_BUF_CTL 0x00000000 -> 0x%08x\n",
+		 encoder->base.base.id, encoder->base.name,
+		 intel_dsi->pin_buf_ctl);
+	intel_de_write(display, DSI_PIN_BUF_CTL, intel_dsi->pin_buf_ctl);
+}
+
+
 static void gen11_dsi_config_util_pin(struct intel_encoder *encoder,
 				      bool enable)
 {
@@ -1114,8 +1248,37 @@ static void gen11_dsi_config_util_pin(struct intel_encoder *encoder,
 	 * for dual link/DSI1 TE is from slave DSI1
 	 * through GPIO.
 	 */
-	if (is_vid_mode(intel_dsi) || (intel_dsi->ports & BIT(PORT_B)))
+
+	/*
+	 * The comment above says TE comes from the slave DSI1 over a GPIO for
+	 * dual link, so UTIL_PIN is not configured in that case.  On this
+	 * panel that leaves no TE input at all once the driver has taken the
+	 * transcoder down: the transfer is TE gated (CMD_MODE_TE_GATE), so
+	 * without TE the transcoder never pushes a frame, and after a
+	 * suspend/resume cycle the picture freezes.  Whatever the firmware
+	 * set up is gone by then.
+	 *
+	 * Configure it for command mode regardless of the port.
+	 *
+	 * The pin is shared, though: a BXT style backlight drives PWM through
+	 * it when the panel uses controller 1 (intel_backlight.c), and
+	 * assert_can_enable_dc6() warns when it is enabled in PWM mode.  The
+	 * mode field survives a disable, which only clears UTIL_PIN_ENABLE, so
+	 * it is a reliable marker of who owns the pin.  Leave it alone when
+	 * somebody else does.
+	 */
+	if (is_vid_mode(intel_dsi))
 		return;
+
+	if ((intel_de_read(display, UTIL_PIN_CTL) & UTIL_PIN_MODE_MASK) ==
+	    UTIL_PIN_MODE_PWM) {
+		drm_dbg_kms(display->drm,
+			    "utility pin is in PWM mode, not using it for TE\n");
+		return;
+	}
+
+	if (enable)
+		gen11_dsi_restore_pin_buf_ctl(encoder);
 
 	tmp = intel_de_read(display, UTIL_PIN_CTL);
 
@@ -1132,6 +1295,8 @@ static void
 gen11_dsi_enable_port_and_phy(struct intel_encoder *encoder,
 			      const struct intel_crtc_state *crtc_state)
 {
+  struct intel_dsi *intel_dsi = enc_to_intel_dsi(encoder);
+
 	/* step 4a: power up all lanes of the DDI used by DSI */
 	gen11_dsi_power_up_lanes(encoder);
 
@@ -1146,6 +1311,15 @@ gen11_dsi_enable_port_and_phy(struct intel_encoder *encoder,
 
 	/* enable DDI buffer */
 	gen11_dsi_enable_ddi_buffer(encoder);
+
+  /*
+	 * The lanes are now driven to LP-11 and the transcoder is not yet
+	 * configured, which is where the panel has to leave reset.  INIT_OTP
+	 * itself runs later, with this leading block skipped.
+	 */
+	if (is_cmd_mode(intel_dsi))
+		intel_dsi_vbt_exec_reset_block(intel_dsi);
+
 
 	gen11_dsi_gate_clocks(encoder);
 
@@ -1190,7 +1364,10 @@ static void gen11_dsi_powerup_panel(struct intel_encoder *encoder)
 				"error setting max return pkt size%d\n", tmp);
 	}
 
-	intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_INIT_OTP);
+  if (is_cmd_mode(intel_dsi))
+		intel_dsi_vbt_exec_init_otp(intel_dsi);
+	else
+		intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_INIT_OTP);
 
 	/* ensure all panel commands dispatched before enabling transcoder */
 	wait_for_cmds_dispatched_to_panel(encoder);
@@ -1298,6 +1475,40 @@ static void gen11_dsi_enable(struct intel_atomic_state *state,
 	intel_dsi_vbt_exec_sequence(intel_dsi, MIPI_SEQ_BACKLIGHT_ON);
 
 	intel_panel_prepare(crtc_state, conn_state);
+
+  	/*
+	 * Kick off the first frame.  Periodic frame update is enabled by now,
+	 * but the transcoder only starts pushing once it has been asked for a
+	 * frame at least once, and the driver has no other way to get there:
+	 * icl_dsi_frame_update() runs at the end of a pipe update, and that
+	 * pipe update waits for a vblank which will not arrive until a frame
+	 * has been pushed.
+	 *
+	 * Taking over a panel the firmware left running hides this, since the
+	 * frames were already flowing.  It shows up after a suspend/resume
+	 * cycle, where the picture freezes and only advances by one frame
+	 * every flip_done timeout.
+	 */
+	if (is_cmd_mode(intel_dsi) && intel_dsi->periodic_cmd_mode) {
+		struct intel_display *d = to_intel_display(encoder);
+		enum port p = (intel_dsi->ports & BIT(PORT_A)) ? PORT_A : PORT_B;
+		u32 before = intel_de_read(d, DSI_CMD_FRMCTL(p));
+		int i;
+
+		intel_de_rmw(d, DSI_CMD_FRMCTL(p), 0, DSI_FRAME_UPDATE_REQUEST);
+
+		for (i = 0; i < 50; i++) {
+			if (!(intel_de_read(d, DSI_CMD_FRMCTL(p)) &
+			      DSI_FRAME_UPDATE_REQUEST))
+				break;
+			delay(1000);
+		}
+
+		drm_dbg_kms(d->drm,
+			    "cmd mode: kicked frame update on port %c after %d ms, DSI_CMD_FRMCTL 0x%08x -> 0x%08x\n",
+			    port_name(p), i, before,
+			    intel_de_read(d, DSI_CMD_FRMCTL(p)));
+	}
 
 	intel_crtc_vblank_on(crtc_state);
 }
@@ -1541,15 +1752,17 @@ static void gen11_dsi_get_timings(struct intel_encoder *encoder,
 static bool gen11_dsi_is_periodic_cmd_mode(struct intel_dsi *intel_dsi)
 {
 	struct intel_display *display = to_intel_display(&intel_dsi->base);
-	enum transcoder dsi_trans;
+  enum port port;
 	u32 val;
 
-	if (intel_dsi->ports == BIT(PORT_B))
-		dsi_trans = TRANSCODER_DSI_1;
-	else
-		dsi_trans = TRANSCODER_DSI_0;
+	port = (intel_dsi->ports & BIT(PORT_A)) ? PORT_A : PORT_B;
 
-	val = intel_de_read(display, DSI_TRANS_FUNC_CONF(dsi_trans));
+  	/*
+	 * DSI_PERIODIC_FRAME_UPDATE_ENABLE lives in DSI_CMD_FRMCTL, not in
+	 * DSI_TRANS_FUNC_CONF; reading the latter made this always return
+	 * false.
+	 */
+	val = intel_de_read(display, DSI_CMD_FRMCTL(port));
 	return (val & DSI_PERIODIC_FRAME_UPDATE_ENABLE);
 }
 
@@ -1585,8 +1798,51 @@ static void gen11_dsi_get_config(struct intel_encoder *encoder,
 	if (is_cmd_mode(intel_dsi))
 		gen11_dsi_get_cmd_mode_config(intel_dsi, pipe_config);
 
-	if (gen11_dsi_is_periodic_cmd_mode(intel_dsi))
-		pipe_config->mode_flags |= I915_MODE_FLAG_DSI_PERIODIC_CMD_MODE;
+	if (is_cmd_mode(intel_dsi) && !intel_dsi->cmd_mode_timings.valid) {
+		struct intel_display *display = to_intel_display(encoder);
+		enum transcoder dsi_trans =
+			dsi_port_to_transcoder(ffs(intel_dsi->ports) - 1);
+		u32 vtotal = intel_de_read(display,
+					   TRANS_VTOTAL(display, dsi_trans));
+
+		/*
+		 * Snapshot the transfer timings the firmware left behind, but
+		 * only while they are still there: this runs at takeover, and
+		 * after a suspend/resume cycle the registers have been through
+		 * the driver's own teardown and no longer hold them.
+		 */
+		if (REG_FIELD_GET(VACTIVE_MASK, vtotal) + 1 ==
+		    pipe_config->hw.adjusted_mode.crtc_vdisplay &&
+		    REG_FIELD_GET(VTOTAL_MASK, vtotal) + 1 >
+		    REG_FIELD_GET(VACTIVE_MASK, vtotal) + 1) {
+			intel_dsi->cmd_mode_timings.hsync =
+				intel_de_read(display,
+					      TRANS_HSYNC(display, dsi_trans));
+			intel_dsi->cmd_mode_timings.vsync =
+				intel_de_read(display,
+					      TRANS_VSYNC(display, dsi_trans));
+			intel_dsi->cmd_mode_timings.vtotal = vtotal;
+			intel_dsi->cmd_mode_timings.valid = true;
+
+			drm_dbg_kms(display->drm,
+				    "cmd mode: firmware timings HSYNC 0x%08x VSYNC 0x%08x VTOTAL 0x%08x\n",
+				    intel_dsi->cmd_mode_timings.hsync,
+				    intel_dsi->cmd_mode_timings.vsync,
+				    intel_dsi->cmd_mode_timings.vtotal);
+		}
+	}
+
+	if (gen11_dsi_is_periodic_cmd_mode(intel_dsi)) {
+ 		pipe_config->mode_flags |= I915_MODE_FLAG_DSI_PERIODIC_CMD_MODE;
+
+		/*
+		 * Remember that the firmware was using periodic frame update,
+		 * so gen11_dsi_configure_transcoder() can put it back after
+		 * the transcoder has been taken down.
+		 */
+		intel_dsi->periodic_cmd_mode = true;
+	}
+  
 }
 
 static void gen11_dsi_sync_state(struct intel_encoder *encoder,
@@ -1595,6 +1851,13 @@ static void gen11_dsi_sync_state(struct intel_encoder *encoder,
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_crtc *intel_crtc;
 	enum pipe pipe;
+
+  /*
+	 * Before the crtc_state check: this runs after hardware readout on both
+	 * boot and resume, and unlike the encoder enable hooks it is reached
+	 * even when the resume turns into a fastset.
+	 */
+	gen11_dsi_restore_pin_buf_ctl(encoder);
 
 	if (!crtc_state)
 		return;

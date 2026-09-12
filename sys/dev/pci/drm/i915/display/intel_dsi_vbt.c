@@ -621,11 +621,37 @@ static const char *sequence_name(enum mipi_seq seq_id)
 	return "(unknown)";
 }
 
+/*
+ * The VBT of a command mode panel can put the reset pulse at the head of
+ * INIT_OTP, as a run of DELAY and GPIO elements before the first packet.
+ * i915 executes INIT_OTP from gen11_dsi_pre_enable(), by which point the
+ * port and the PHY are already up and the transcoder is configured - the
+ * panel comes out of reset into a link that is being driven and never
+ * syncs.
+ *
+ * MIPI requires the peripheral to leave reset with the lanes in LP-11, so
+ * the reset block has to run once the DDI buffer is enabled but before the
+ * transcoder is configured.  Split it out of the sequence so it can.
+ */
+enum mipi_seq_part {
+	MIPI_SEQ_PART_ALL = 0,
+	MIPI_SEQ_PART_RESET,	/* the leading DELAY/GPIO run only */
+	MIPI_SEQ_PART_REST,	/* everything after it */
+};
+
+static bool mipi_elem_is_reset_block(u8 operation_byte)
+{
+	return operation_byte == MIPI_SEQ_ELEM_DELAY ||
+	       operation_byte == MIPI_SEQ_ELEM_GPIO;
+}
+
 static void intel_dsi_vbt_exec(struct intel_dsi *intel_dsi,
-			       enum mipi_seq seq_id)
+			       enum mipi_seq seq_id,
+             enum mipi_seq_part part)
 {
 	struct intel_display *display = to_intel_display(&intel_dsi->base);
 	struct intel_connector *connector = intel_dsi->attached_connector;
+  bool in_reset_block = true;
 	const u8 *data;
 	fn_mipi_elem_exec mipi_elem_exec;
 
@@ -639,8 +665,9 @@ static void intel_dsi_vbt_exec(struct intel_dsi *intel_dsi,
 
 	drm_WARN_ON(display->drm, *data != seq_id);
 
-	drm_dbg_kms(display->drm, "Starting MIPI sequence %d - %s\n",
-		    seq_id, sequence_name(seq_id));
+  if (part != MIPI_SEQ_PART_RESET)
+	  drm_dbg_kms(display->drm, "Starting MIPI sequence %d - %s\n",
+		      seq_id, sequence_name(seq_id));
 
 	/* Skip Sequence Byte. */
 	data++;
@@ -661,6 +688,22 @@ static void intel_dsi_vbt_exec(struct intel_dsi *intel_dsi,
 		/* Size of Operation. */
 		if (connector->panel.vbt.dsi.seq_version >= 3)
 			operation_size = *data++;
+
+    /*
+		 * The reset block is the run of DELAY/GPIO elements at the
+		 * head of the sequence, up to the first element of any
+		 * other kind.
+		 */
+		if (in_reset_block && !mipi_elem_is_reset_block(operation_byte))
+			in_reset_block = false;
+
+		if (part == MIPI_SEQ_PART_RESET && !in_reset_block)
+			return;
+
+		if (part == MIPI_SEQ_PART_REST && in_reset_block) {
+			data += operation_size;
+			continue;
+		}
 
 		if (mipi_elem_exec) {
 			const u8 *next = data + operation_size;
@@ -689,6 +732,66 @@ static void intel_dsi_vbt_exec(struct intel_dsi *intel_dsi,
 	}
 }
 
+/*
+ * Splitting the sequence requires the per element size, which only exists
+ * from sequence block version 3 on. On older VBTs leave INIT_OTP alone:
+ * intel_dsi_vbt_exec_reset_block() does nothing and
+ * intel_dsi_vbt_exec_init_otp() runs the whole sequence in place, which is
+ * what the driver did before.
+ */
+static bool intel_dsi_vbt_can_split(struct intel_dsi *intel_dsi)
+{
+	struct intel_connector *connector = intel_dsi->attached_connector;
+	const u8 *data;
+
+	/* Splitting needs the per element size, added in version 3. */
+	if (connector->panel.vbt.dsi.seq_version < 3)
+		return false;
+
+	data = connector->panel.vbt.dsi.sequence[MIPI_SEQ_INIT_OTP];
+	if (!data)
+		return false;
+
+	data++;		/* sequence byte */
+	data += 4;	/* size of sequence */
+
+	/*
+	 * Only split when the leading run actually contains a GPIO element,
+	 * that is, when there is a panel reset in there to move.  A sequence
+	 * that merely starts with a delay is left exactly as it was.
+	 */
+	while (*data != MIPI_SEQ_ELEM_END) {
+		u8 operation_byte = *data++;
+		u8 operation_size = *data++;
+
+		if (operation_byte == MIPI_SEQ_ELEM_GPIO)
+			return true;
+		if (operation_byte != MIPI_SEQ_ELEM_DELAY)
+			return false;
+
+		data += operation_size;
+	}
+
+	return false;
+}
+
+/* Run only the leading DELAY/GPIO run of INIT_OTP - the panel reset. */
+void intel_dsi_vbt_exec_reset_block(struct intel_dsi *intel_dsi)
+{
+	if (!intel_dsi_vbt_can_split(intel_dsi))
+		return;
+
+	intel_dsi_vbt_exec(intel_dsi, MIPI_SEQ_INIT_OTP, MIPI_SEQ_PART_RESET);
+}
+
+/* Run INIT_OTP with that leading run skipped, if it was run separately. */
+void intel_dsi_vbt_exec_init_otp(struct intel_dsi *intel_dsi)
+{
+	intel_dsi_vbt_exec(intel_dsi, MIPI_SEQ_INIT_OTP,
+			   intel_dsi_vbt_can_split(intel_dsi) ?
+			   MIPI_SEQ_PART_REST : MIPI_SEQ_PART_ALL);
+}
+
 void intel_dsi_vbt_exec_sequence(struct intel_dsi *intel_dsi,
 				 enum mipi_seq seq_id)
 {
@@ -699,7 +802,7 @@ void intel_dsi_vbt_exec_sequence(struct intel_dsi *intel_dsi,
 	if (seq_id == MIPI_SEQ_BACKLIGHT_ON && intel_dsi->gpio_backlight)
 		gpiod_set_value_cansleep(intel_dsi->gpio_backlight, 1);
 
-	intel_dsi_vbt_exec(intel_dsi, seq_id);
+	intel_dsi_vbt_exec(intel_dsi, seq_id, MIPI_SEQ_PART_ALL);
 
 	if (seq_id == MIPI_SEQ_POWER_OFF && intel_dsi->gpio_panel)
 		gpiod_set_value_cansleep(intel_dsi->gpio_panel, 0);

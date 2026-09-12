@@ -39,6 +39,22 @@
 #define  SPLITTER_CONFIGURATION_MASK		REG_GENMASK(26, 25)
 #define  SPLITTER_CONFIGURATION_2_SEGMENT	REG_FIELD_PREP(SPLITTER_CONFIGURATION_MASK, 0)
 #define  SPLITTER_CONFIGURATION_4_SEGMENT	REG_FIELD_PREP(SPLITTER_CONFIGURATION_MASK, 1)
+/*
+ * The bits in dss_ctl1_reg() that belong to whoever programmed the
+ * splitter rather than to intel_dsc_enable(): configure_dual_link_mode()
+ * owns SPLITTER_ENABLE, DUAL_LINK_MODE_INTERLEAVE, OVERLAP_PIXELS and
+ * LEFT_DL_BUF_TARGET_DEPTH; intel_ddi_mso_configure() owns
+ * SPLITTER_ENABLE, SPLITTER_CONFIGURATION and OVERLAP_PIXELS.
+ *
+ * The first four are listed above under DSS_CTL1 and SPLITTER_CONFIGURATION
+ * under ICL_PIPE_DSS_CTL1; dss_ctl1_reg() picks one register or the other
+ * by display version and the layout of these bits is the same in both.
+ */
+#define  SPLITTER_STATE				(SPLITTER_ENABLE | \
+						 SPLITTER_CONFIGURATION_MASK | \
+						 DUAL_LINK_MODE_INTERLEAVE | \
+						 OVERLAP_PIXELS_MASK | \
+						 LEFT_DL_BUF_TARGET_DEPTH_MASK)
 #define  ULTRA_JOINER_ENABLE			REG_BIT(23)
 #define  PRIMARY_ULTRA_JOINER_ENABLE		REG_BIT(22)
 #define  UNCOMPRESSED_JOINER_PRIMARY		(1 << 21)

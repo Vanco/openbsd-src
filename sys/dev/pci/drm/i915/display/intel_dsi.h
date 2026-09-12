@@ -76,6 +76,31 @@ struct intel_dsi {
 	 */
 	enum mipi_dsi_pixel_format pixel_format;
 
+  	/*
+	 * Set at hardware readout when the firmware had periodic frame update
+	 * enabled, so gen11_dsi_configure_transcoder() can restore it.
+	 */
+	bool periodic_cmd_mode;
+
+	/*
+	 * Last non-zero value seen in DSI_PIN_BUF_CTL, remembered so that it
+	 * can be put back after a suspend/resume cycle clears it.
+	 * See gen11_dsi_restore_pin_buf_ctl().
+	 */
+	u32 pin_buf_ctl;
+
+	/*
+	 * The command mode transfer timings the firmware programmed, taken at
+	 * hardware readout while they are still in the registers.  See
+	 * gen11_dsi_set_transcoder_timings().
+	 */
+	struct {
+		bool valid;
+		u32 hsync;
+		u32 vsync;
+		u32 vtotal;
+	} cmd_mode_timings;
+
 	/* NON_BURST_SYNC_PULSE, NON_BURST_SYNC_EVENTS, or BURST_MODE */
 	int video_mode;
 
