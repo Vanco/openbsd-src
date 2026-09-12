@@ -187,7 +187,7 @@ send_auth_request(struct request *req, const char *username,
 	if (strlcpy(auth_req.password, password,
 	    sizeof(auth_req.password)) >= sizeof(auth_req.password))
 		goto fail;
-	auth_req.fd = req->conn->fd;
+	auth_req.id = req->conn->id;
 	auth_req.msgid = req->msgid;
 
 	if (imsgev_compose(iev_ldapd, IMSG_LDAPD_AUTH, 0, 0, -1, &auth_req,

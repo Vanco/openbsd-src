@@ -471,10 +471,8 @@ lcp_reqci(fsm *f, u_char *inp, int *lenp, int reject_if_disagree)
 				if (lrej > 0) {
 				/* if there is a reject, will send Rej, not send Nak. */
 				} else {
-					inp -= 2;
-					memcpy(nakbuf, inp, len);
-					nakbuf += len;
-					inp += 2;
+					PUTCHAR(type, nakbuf);
+					PUTCHAR(len, nakbuf);
 					PUTSHORT(f->ppp->mru, nakbuf);
 
 					rcode = CONFNAK;

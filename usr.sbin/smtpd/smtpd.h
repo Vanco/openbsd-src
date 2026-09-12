@@ -70,11 +70,16 @@
 
 /*
  * RFC 5322 defines these characters as valid, some of them are
- * potentially dangerous and need to be escaped.
+ * potentially dangerous and need to be escaped. Even though we
+ * should be accepting $ ` { | } as valid characters, these are
+ * never present in legitimate envelope addresses and are often
+ * used in exploit attempts so we disallow them.
  */
-#define	MAILADDR_ALLOWED       	"!#$%&'*/?^`{|}~+-=_"
+#define	MAILADDR_ALLOWED       	"!#%&'*/?^~+-=_"
 #define	MAILADDR_ESCAPE		"!#$%&'*?`{|}~"
 
+/* filter out shell metacharacters but retain punctuation */
+#define	MAILADDR_RAW_ESCAPE     "!#$&'*?`{|}~"
 
 #define F_STARTTLS		0x01
 #define F_SMTPS			0x02

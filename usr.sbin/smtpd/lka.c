@@ -25,6 +25,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "smtpd.h"
 #include "log.h"
@@ -82,6 +83,8 @@ lka_imsg(struct mproc *p, struct imsg *imsg)
 	size_t			 msgsz;
 	int			 ok;
 	int			 fcrdns;
+
+	memset(&userinfo, 0, sizeof userinfo);
 
 	if (imsg == NULL)
 		lka_shutdown();

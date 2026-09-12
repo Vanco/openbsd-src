@@ -29,6 +29,8 @@
 
 #define	VT100_EMUL_NARGS	10	/* max # of args to a command */
 
+#define	VT100_EMUL_ARG_CLAMP	100000	/* max value of arg to a command */
+
 struct wsemul_vt100_emuldata {
 	const struct wsdisplay_emulops *emulops;
 	struct wsemul_abortstate abortstate;
@@ -72,7 +74,7 @@ struct wsemul_vt100_emuldata {
 	int sschartab; /* single shift */
 
 	int nargs;
-	u_int args[VT100_EMUL_NARGS]; /* numeric command args (CSI/DCS) */
+	int args[VT100_EMUL_NARGS]; /* numeric command args (CSI/DCS) */
 
 	char modif1;	/* {>?} in VT100_EMUL_STATE_CSI */
 	char modif2;	/* {!"$&} in VT100_EMUL_STATE_CSI */

@@ -845,6 +845,8 @@ ttioctl(struct tty *tp, u_long cmd, caddr_t data, int flag, struct proc *p)
 	case TIOCGSID:			/* get sid of tty */
 		if (!isctty(pr, tp))
 			return (ENOTTY);
+		if (tp->t_session->s_leader == NULL)	/* XXX session stored wrong */
+			return (ENOTTY);
 		*(int *)data = tp->t_session->s_leader->ps_pid;
 		break;
 	case TIOCNXCL:			/* reset exclusive use of tty */

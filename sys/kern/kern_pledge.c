@@ -652,7 +652,7 @@ pledge_namei(struct proc *p, struct nameidata *ni, char *path)
 	ple = p->p_pledge;
 	nip = ni->ni_pledge;
 	if (nip == 0)
-		panic("pledge_namei: ni_pledge");
+		return pledge_fail(p, EPERM, 0);
 
 	/* Doing a permitted execve() */
 	if ((nip & PLEDGE_EXEC) && (ple & PLEDGE_EXEC))

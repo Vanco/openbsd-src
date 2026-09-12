@@ -984,7 +984,7 @@ nfs_loadattrcache(struct vnode **vpp, struct mbuf **mdp, caddr_t *dposp,
 	 * information.
 	 */
 	np = VTONFS(vp);
-	if (vp->v_type != vtyp) {
+	if (vp->v_type == VNON) {
 		cache_purge(vp);
 		vp->v_type = vtyp;
 		if (vp->v_type == VFIFO) {
@@ -1472,14 +1472,14 @@ nfsm_build(struct mbuf **mp, u_int len)
 }
 
 void
-nfsm_fhtom(struct nfsm_info *info, struct vnode *v, int v3)
+nfsm_fhtom(struct mbuf **mb, struct vnode *v, int v3)
 {
 	struct nfsnode *n = VTONFS(v);
 
 	if (v3) {
-		nfsm_strtombuf(&info->nmi_mb, n->n_fhp, n->n_fhsize);
+		nfsm_strtombuf(mb, n->n_fhp, n->n_fhsize);
 	} else {
-		nfsm_buftombuf(&info->nmi_mb, n->n_fhp, NFSX_V2FH);
+		nfsm_buftombuf(mb, n->n_fhp, NFSX_V2FH);
 	}
 }
 

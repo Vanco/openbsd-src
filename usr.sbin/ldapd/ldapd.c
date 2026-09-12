@@ -355,7 +355,7 @@ ldapd_auth_request(struct imsgev *iev, struct imsg *imsg)
 
 	log_debug("authenticating [%s]", areq->name);
 	ares.ok = ldapd_auth_classful(areq->name, areq->password);
-	ares.fd = areq->fd;
+	ares.id = areq->id;
 	ares.msgid = areq->msgid;
 	memset(areq, 0, sizeof(*areq));
 	imsgev_compose(iev, IMSG_LDAPD_AUTH_RESULT, 0, 0, -1, &ares,

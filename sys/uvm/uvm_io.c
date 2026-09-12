@@ -74,7 +74,7 @@ uvm_io(vm_map_t map, struct uio *uio, int flags)
 		return(EIO);
 
 	if (baseva >= VM_MAXUSER_ADDRESS)
-		return(0);
+		return (EIO);
 	if (endva >= VM_MAXUSER_ADDRESS)
 		/* EOF truncate */
 		togo = togo - (endva - VM_MAXUSER_ADDRESS + 1);

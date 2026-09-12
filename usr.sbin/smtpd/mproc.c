@@ -589,6 +589,8 @@ m_get_sockaddr(struct msg *m, struct sockaddr *sa)
 	size_t len;
 
 	m_get_size(m, &len);
+	if (len > sizeof(struct sockaddr_storage))
+		m_error("sockaddr size too large");
 	m_get(m, sa, len);
 }
 

@@ -2949,6 +2949,8 @@ if_getdata(struct ifnet *ifp, struct if_data *data)
 {
 	unsigned int i;
 
+	memset(data, 0, sizeof(*data));
+
 	data->ifi_type = ifp->if_type;
 	data->ifi_addrlen = ifp->if_addrlen;
 	data->ifi_hdrlen = ifp->if_hdrlen;
