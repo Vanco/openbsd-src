@@ -245,6 +245,41 @@ hidmt_setup(struct device *self, struct hidmt *mt, void *desc, int dlen)
 		goto fail;
 	}
 
+	/* 设置 Surface Switch 和 Button Switch（如果存在） */
+	if (mt->sc_rep_switch > 0) {
+		int size = hid_report_size(desc, dlen, hid_feature, mt->sc_rep_switch);
+		if (size > 0) {
+			    uint8_t *buf = malloc(size, M_DEVBUF, M_WAITOK | M_ZERO);
+			    if (buf != NULL) {
+				        struct hid_location loc;
+				        /* Surface Switch */
+				        if (hid_locate(desc, dlen,
+				            HID_USAGE2(HUP_DIGITIZERS, HUD_SURFACE_SWITCH),
+				            mt->sc_rep_switch, hid_feature, &loc, NULL)) {
+				            int byte = loc.pos / 8;
+				            int bit = loc.pos % 8;
+				            if (byte < size)
+				                buf[byte] |= (1 << bit);
+				        }
+				        /* Button Switch */
+				        if (hid_locate(desc, dlen,
+				            HID_USAGE2(HUP_DIGITIZERS, HUD_BUTTON_SWITCH),
+				            mt->sc_rep_switch, hid_feature, &loc, NULL)) {
+				            int byte = loc.pos / 8;
+				            int bit = loc.pos % 8;
+				            if (byte < size)
+				                buf[byte] |= (1 << bit);
+				        }
+				        int ret = mt->hidev_set_report(mt->sc_device,
+				            mt->hidev_report_type_conv(hid_feature),
+				            mt->sc_rep_switch, buf, size);
+				        printf("%s: set surface/button switch ret=%d\n",
+				            self->dv_xname, ret);
+				        free(buf, M_DEVBUF, size);
+			    }
+		}
+	}
+
 	free(rep, M_DEVBUF, capsize);
 	return 0;
 
@@ -560,7 +595,7 @@ hidmt_disable(struct hidmt *mt)
 
 int
 hidmt_find_winptp_reports(const void *desc, int len, int *input_rid,
-    int *config_rid, int *cap_rid)
+    int *config_rid, int *cap_rid, int *switch_rid)
 {
 	static int32_t ptp_collections[] = {
 		HID_USAGE2(HUP_DIGITIZERS, HUD_FINGER), 0
@@ -578,6 +613,10 @@ hidmt_find_winptp_reports(const void *desc, int len, int *input_rid,
 	static int32_t cfg_usages[] = {
 		HID_USAGE2(HUP_DIGITIZERS, HUD_INPUT_MODE),
 	};
+	static int32_t switch_usages[] = {
+		HID_USAGE2(HUP_DIGITIZERS, HUD_SURFACE_SWITCH),
+		HID_USAGE2(HUP_DIGITIZERS, HUD_BUTTON_SWITCH),
+	};
 	static int32_t cap_usages[] = {
 		HID_USAGE2(HUP_DIGITIZERS, HUD_CONTACT_MAX),
 	};
@@ -591,6 +630,9 @@ hidmt_find_winptp_reports(const void *desc, int len, int *input_rid,
 	*cap_rid = hid_find_report(desc, len, hid_feature,
 	    HID_USAGE2(HUP_DIGITIZERS, HUD_TOUCHPAD),
 	    nitems(cap_usages), cap_usages, ptp_collections);
+	*switch_rid = hid_find_report(desc, len, hid_feature,
+	    HID_USAGE2(HUP_DIGITIZERS, HUD_CONFIG),
+	    nitems(switch_usages), switch_usages, ptp_collections);
 
 	return (*input_rid > 0 && *config_rid > 0 && *cap_rid > 0);
 }

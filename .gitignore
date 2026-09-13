@@ -3,3 +3,4 @@
 **/CVS
 *.orig
 *.rej
+/sys/arch/amd64/compile/

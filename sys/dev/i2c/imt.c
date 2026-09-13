@@ -42,6 +42,7 @@ struct imt_softc {
 	int		sc_rep_input;
 	int		sc_rep_config;
 	int		sc_rep_cap;
+	int             sc_rep_switch;
 };
 
 int	imt_enable(void *);
@@ -76,18 +77,22 @@ int
 imt_match(struct device *parent, void *match, void *aux)
 {
 	struct ihidev_attach_arg *iha = (struct ihidev_attach_arg *)aux;
-	int input_rid, conf_rid, cap_rid;
+	int input_rid, conf_rid, cap_rid, switch_rid;
 	int size;
 	void *desc;
 
 	if (iha->reportid == IHIDEV_CLAIM_MULTIPLEID) {
 		ihidev_get_report_desc(iha->parent, &desc, &size);
 		if (hidmt_find_winptp_reports(desc, size,
-		    &input_rid, &conf_rid, &cap_rid)) {
+		    &input_rid, &conf_rid, &cap_rid, &switch_rid)) {
 			iha->claims[0] = input_rid;
 			iha->claims[1] = conf_rid;
 			iha->claims[2] = cap_rid;
 			iha->nclaims = 3;
+			if (switch_rid > 0) {
+				iha->claims[3] = switch_rid;
+				iha->nclaims = 4;
+			}
 			return (IMATCH_DEVCLASS_DEVSUBCLASS);
 		}
 	}
@@ -109,7 +114,7 @@ imt_attach(struct device *parent, struct device *self, void *aux)
 
 	ihidev_get_report_desc(iha->parent, &desc, &size);
 	hidmt_find_winptp_reports(desc, size, &sc->sc_rep_input,
-	    &sc->sc_rep_config, &sc->sc_rep_cap);
+	    &sc->sc_rep_config, &sc->sc_rep_cap, &sc->sc_rep_switch);
 
 	memset(mt, 0, sizeof(sc->sc_mt));
 
@@ -122,6 +127,7 @@ imt_attach(struct device *parent, struct device *self, void *aux)
 	mt->sc_rep_input = sc->sc_rep_input;
 	mt->sc_rep_config = sc->sc_rep_config;
 	mt->sc_rep_cap = sc->sc_rep_cap;
+	mt->sc_rep_switch = sc->sc_rep_switch;
 
 	if (hidmt_setup(self, mt, desc, size) != 0)
 		return;

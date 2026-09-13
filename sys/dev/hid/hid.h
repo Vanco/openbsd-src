@@ -391,6 +391,8 @@ int	hid_find_report(const void *, int len, enum hid_kind, int32_t,
 #define HUD_CONTACTCOUNT	0x0054
 #define HUD_CONTACT_MAX		0x0055
 #define HUD_SCAN_TIME		0x0056
+#define HUD_SURFACE_SWITCH 0x0057
+#define HUD_BUTTON_SWITCH 0x0058
 #define HUD_BUTTON_TYPE		0x0059
 #define HUD_SECONDARY_BARREL_SWITCH	0x005A
 #define HUD_WACOM_X		0x0130

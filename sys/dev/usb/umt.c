@@ -44,6 +44,7 @@ struct umt_softc {
 	int		sc_rep_input;
 	int		sc_rep_config;
 	int		sc_rep_cap;
+	int             sc_rep_switch;
 
 	u_int32_t	sc_quirks;
 };
@@ -80,17 +81,20 @@ int
 umt_match(struct device *parent, void *match, void *aux)
 {
 	struct uhidev_attach_arg *uha = (struct uhidev_attach_arg *)aux;
-	int input = 0, conf = 0, cap = 0;
+	int input = 0, conf = 0, cap = 0, sw = 0;
 	int size;
 	void *desc;
 
 	if (UHIDEV_CLAIM_MULTIPLE_REPORTID(uha)) {
 		uhidev_get_report_desc(uha->parent, &desc, &size);
 		if (hidmt_find_winptp_reports(desc, size, &input,
-		    &conf, &cap)) {
+		    &conf, &cap, &sw)) {
 			uha->claimed[input] = 1;
 			uha->claimed[conf] = 1;
 			uha->claimed[cap] = 1;
+			if (sw > 0)
+				uha->claimed[sw] = 1;
+					
 			return (UMATCH_DEVCLASS_DEVSUBCLASS);
 		}
 	}
@@ -118,7 +122,7 @@ umt_attach(struct device *parent, struct device *self, void *aux)
 
 	uhidev_get_report_desc(uha->parent, &desc, &size);
 	hidmt_find_winptp_reports(desc, size, &sc->sc_rep_input,
-	    &sc->sc_rep_config, &sc->sc_rep_cap);
+	    &sc->sc_rep_config, &sc->sc_rep_cap, &sc->sc_rep_switch);
 
 	memset(mt, 0, sizeof(sc->sc_mt));
 
@@ -131,6 +135,7 @@ umt_attach(struct device *parent, struct device *self, void *aux)
 	mt->sc_rep_input = sc->sc_rep_input;
 	mt->sc_rep_config = sc->sc_rep_config;
 	mt->sc_rep_cap = sc->sc_rep_cap;
+	mt->sc_rep_switch = sc->sc_rep_switch;
 
 	if (hidmt_setup(self, mt, desc, size) != 0)
 		return;

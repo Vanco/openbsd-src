@@ -49,6 +49,7 @@ struct hidmt {
 	int		sc_rep_input_size;
 	int		sc_rep_config;
 	int		sc_rep_cap;
+	int   sc_rep_switch;
 
 	SIMPLEQ_HEAD(, hidmt_data) sc_inputs;
 
@@ -77,4 +78,4 @@ int	hidmt_enable(struct hidmt *);
 void	hidmt_input(struct hidmt *, uint8_t *, u_int);
 int	hidmt_ioctl(struct hidmt *, u_long, caddr_t, int, struct proc *);
 int	hidmt_setup(struct device *, struct hidmt *, void *, int);
-int	hidmt_find_winptp_reports(const void *, int, int *, int *, int *);
+int	hidmt_find_winptp_reports(const void *, int, int *, int *, int *, int *);
