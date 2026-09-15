@@ -292,6 +292,8 @@ umass*	at uhub?		# USB Mass Storage devices
 ubcmtp*	at uhub?		# Broadcom USB trackpad
 wsmouse* at ubcmtp? mux 0
 uhidev*	at uhub?		# Human Interface Devices
+usty*   at uhidev?      # USB touchscreen & stylus
+wsmouse* at usty? mux 0
 ums*	at uhidev?		# USB mouse
 wsmouse* at ums? mux 0
 umt*	at uhidev?		# USB multitouch touchpad

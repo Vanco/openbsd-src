@@ -119,13 +119,13 @@ ums_match(struct device *parent, void *match, void *aux)
 	    HID_USAGE2(HUP_GENERIC_DESKTOP, HUG_MOUSE)))
 		return (UMATCH_IFACECLASS);
 
-	if (hid_is_collection(desc, size, uha->reportid,
+	/*if (hid_is_collection(desc, size, uha->reportid,
 	    HID_USAGE2(HUP_DIGITIZERS, HUD_TOUCHSCREEN)))
 		return (UMATCH_IFACECLASS);
 
 	if (hid_is_collection(desc, size, uha->reportid,
 	    HID_USAGE2(HUP_DIGITIZERS, HUD_PEN)))
-		return (UMATCH_IFACECLASS);
+		return (UMATCH_IFACECLASS);*/
 
 	return (UMATCH_NONE);
 }
